@@ -4,6 +4,8 @@ version = "0.1.0"
 authors = ["Anthony Inzero inzero@protonmail.com"]
 
 [dependencies]
-winit = "0.11.0"
+winit = "*"
+vulkano = "*"
+vulkano-win = "*"
 
 
