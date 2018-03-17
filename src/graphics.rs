@@ -272,125 +272,118 @@ pub mod render_manager {
             window
         }
 
-        pub fn render(self, ref window: &vulkano_win::Window) {
-            if self.render_components.is_some() {
-                let vulkan_components = self.render_components.unwrap();
+        pub fn render(&mut self, ref window: &vulkano_win::Window) {
+            match self.render_components {
+                Some(ref mut components) => {
+                    let dimensions = components.dimensions;
 
-                let device = vulkan_components.device;
-                let dimensions = vulkan_components.dimensions;
-                let mut framebuffers = vulkan_components.framebuffers;
-                let mut images = vulkan_components.images;
-                let pipeline = vulkan_components.pipeline;
-                let queue = vulkan_components.queue;
-                let render_pass = vulkan_components.render_pass;
-                let mut swapchain = vulkan_components.swapchain;
-                let vertex_buffer = vulkan_components.vertex_buffer;
+                    let mut recreate_swapchain = false;
 
-                let mut recreate_swapchain = false;
+                    let mut previous_frame_end = Box::new(now(components.device.clone())) as Box<GpuFuture>;
 
-                let mut previous_frame_end = Box::new(now(device.clone())) as Box<GpuFuture>;
+                    previous_frame_end.cleanup_finished();
 
-                previous_frame_end.cleanup_finished();
+                    if recreate_swapchain {
+                        // Get the new dimensions for the viewport/framebuffers.
+                        let dimensions = {
+                            let (new_width, new_height) =
+                                window.window().get_inner_size_pixels().unwrap();
+                            [new_width, new_height]
+                        };
 
-                if recreate_swapchain {
-                    // Get the new dimensions for the viewport/framebuffers.
-                    let dimensions = {
-                        let (new_width, new_height) =
-                            window.window().get_inner_size_pixels().unwrap();
-                        [new_width, new_height]
-                    };
+                        let (new_swapchain, new_images) = match components.swapchain
+                            .recreate_with_dimension(dimensions)
+                        {
+                            Ok(r) => r,
+                            // This error tends to happen when the user is manually resizing the window.
+                            // Simply restarting the loop is the easiest way to fix this issue.
+                            Err(SwapchainCreationError::UnsupportedDimensions) => return,
+                            Err(err) => panic!("{:?}", err),
+                        };
 
-                    let (new_swapchain, new_images) = match swapchain
-                        .recreate_with_dimension(dimensions)
-                    {
-                        Ok(r) => r,
-                        // This error tends to happen when the user is manually resizing the window.
-                        // Simply restarting the loop is the easiest way to fix this issue.
-                        Err(SwapchainCreationError::UnsupportedDimensions) => return,
-                        Err(err) => panic!("{:?}", err),
-                    };
+                        mem::replace(&mut components.swapchain, new_swapchain);
+                        mem::replace(&mut components.images, new_images);
 
-                    mem::replace(&mut swapchain, new_swapchain);
-                    mem::replace(&mut images, new_images);
+                        components.framebuffers = None;
 
-                    framebuffers = None;
+                        recreate_swapchain = false;
+                    }
 
-                    recreate_swapchain = false;
+                    if components.framebuffers.is_none() {
+                        let new_framebuffers = Some(
+                            components.images
+                                .iter()
+                                .map(|image| {
+                                    Arc::new(
+                                        Framebuffer::start(components.render_pass.clone())
+                                            .add(image.clone())
+                                            .unwrap()
+                                            .build()
+                                            .unwrap(),
+                                    )
+                                })
+                                .collect::<Vec<_>>(),
+                        );
+                        mem::replace(&mut components.framebuffers, new_framebuffers);
+                    }
+
+                    let (image_num, acquire_future) =
+                        match swapchain::acquire_next_image(components.swapchain.clone(), None) {
+                            Ok(r) => r,
+                            Err(AcquireError::OutOfDate) => {
+                                recreate_swapchain = true;
+                                return;
+                            }
+                            Err(err) => panic!("{:?}", err),
+                        };
+
+                    let command_buffer = AutoCommandBufferBuilder::primary_one_time_submit(
+                        components.device.clone(),
+                        components.queue.family(),
+                    ).unwrap()
+                        .begin_render_pass(
+                            components.framebuffers.as_ref().unwrap()[image_num].clone(),
+                            false,
+                            vec![[0.0, 0.0, 1.0, 1.0].into()],
+                        )
+                        .unwrap()
+                        .draw(
+                            components.pipeline.clone(),
+                            DynamicState {
+                                line_width: None,
+                                // TODO: Find a way to do this without having to dynamically allocate a Vec every frame.
+                                viewports: Some(vec![
+                                    Viewport {
+                                        origin: [0.0, 0.0],
+                                        dimensions: [dimensions[0] as f32, dimensions[1] as f32],
+                                        depth_range: 0.0..1.0,
+                                    },
+                                ]),
+                                scissors: None,
+                            },
+                            components.vertex_buffer.clone(),
+                            (),
+                            (),
+                        )
+                        .unwrap()
+                        .end_render_pass()
+                        .unwrap()
+                        .build()
+                        .unwrap();
+
+                    let future = previous_frame_end
+                        .join(acquire_future)
+                        .then_execute(components.queue.clone(), command_buffer)
+                        .unwrap()
+                        .then_swapchain_present(components.queue.clone(), components.swapchain.clone(), image_num)
+                        .then_signal_fence_and_flush()
+                        .unwrap();
+                    previous_frame_end = Box::new(future) as Box<_>;
                 }
-
-                if framebuffers.is_none() {
-                    let new_framebuffers = Some(
-                        images
-                            .iter()
-                            .map(|image| {
-                                Arc::new(
-                                    Framebuffer::start(render_pass.clone())
-                                        .add(image.clone())
-                                        .unwrap()
-                                        .build()
-                                        .unwrap(),
-                                )
-                            })
-                            .collect::<Vec<_>>(),
-                    );
-                    mem::replace(&mut framebuffers, new_framebuffers);
+                None => {
+                    // TODO(Z): Fix this to stop program
+                    panic!("Someone didn't start the renderer...")
                 }
-
-                let (image_num, acquire_future) =
-                    match swapchain::acquire_next_image(swapchain.clone(), None) {
-                        Ok(r) => r,
-                        Err(AcquireError::OutOfDate) => {
-                            recreate_swapchain = true;
-                            return;
-                        }
-                        Err(err) => panic!("{:?}", err),
-                    };
-
-                let command_buffer = AutoCommandBufferBuilder::primary_one_time_submit(
-                    device.clone(),
-                    queue.family(),
-                ).unwrap()
-                    .begin_render_pass(
-                        framebuffers.as_ref().unwrap()[image_num].clone(),
-                        false,
-                        vec![[0.0, 0.0, 1.0, 1.0].into()],
-                    )
-                    .unwrap()
-                    .draw(
-                        pipeline.clone(),
-                        DynamicState {
-                            line_width: None,
-                            // TODO: Find a way to do this without having to dynamically allocate a Vec every frame.
-                            viewports: Some(vec![
-                                Viewport {
-                                    origin: [0.0, 0.0],
-                                    dimensions: [dimensions[0] as f32, dimensions[1] as f32],
-                                    depth_range: 0.0..1.0,
-                                },
-                            ]),
-                            scissors: None,
-                        },
-                        vertex_buffer.clone(),
-                        (),
-                        (),
-                    )
-                    .unwrap()
-                    .end_render_pass()
-                    .unwrap()
-                    .build()
-                    .unwrap();
-
-                let future = previous_frame_end
-                    .join(acquire_future)
-                    .then_execute(queue.clone(), command_buffer)
-                    .unwrap()
-                    .then_swapchain_present(queue.clone(), swapchain.clone(), image_num)
-                    .then_signal_fence_and_flush()
-                    .unwrap();
-                previous_frame_end = Box::new(future) as Box<_>;
-            } else {
-                // TODO(Z): Fix this to stop program
-                println!("Someone didn't start the renderer...")
             }
         }
     }

@@ -26,7 +26,6 @@ fn read_file(file_name: &str) -> Result<String> {
     Ok(contents)
 }
 
-
 fn main() {
     let mut event_loop = EventsLoop::new();
     
@@ -37,12 +36,7 @@ fn main() {
     let mut running = true;
 
     while running {
-        // TODO(Z): This deep copy in aloop is horrible inefficent, but I am
-        //          in the process of wrangling rust's move and copy
-        //          semantics
-        let rm = render_manager.clone();
- 
-        rm.render(&window);
+        render_manager.render(&window);
         event_loop.poll_events(|event| {
             if let winit::Event::WindowEvent { event, .. } = event {
                 match event {
