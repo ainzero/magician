@@ -1,6 +1,6 @@
 #[macro_use]
 extern crate vulkano;
- #[macro_use]
+#[macro_use]
 extern crate vulkano_shader_derive;
 extern crate vulkano_win;
 extern crate winit;
@@ -13,6 +13,7 @@ use winit::EventsLoop;
 
 use std::fs::File;
 use std::io::{BufReader, Read, Result};
+use std::process;
 
 fn read_file(file_name: &str) -> Result<String> {
     let file = File::open(file_name)?;
@@ -28,31 +29,32 @@ fn read_file(file_name: &str) -> Result<String> {
 
 fn main() {
     let mut event_loop = EventsLoop::new();
-    
+
     let mut render_manager = RenderManager::new();
 
     let window = render_manager.startup(&event_loop);
 
     let mut running = true;
-
-    while running {
+    loop {
         render_manager.render(&window);
+
         event_loop.poll_events(|event| {
             if let winit::Event::WindowEvent { event, .. } = event {
                 match event {
                     winit::WindowEvent::Closed => running = false,
                     winit::WindowEvent::KeyboardInput { input, .. } => {
-                        if input.virtual_keycode.is_some() {
-                            let key = input.virtual_keycode.unwrap();
-
-                            if key == winit::VirtualKeyCode::Escape {
-                                running = false
-                            }
+                        match input.virtual_keycode {
+                            Some(winit::VirtualKeyCode::Escape) => running = false,
+                            _ => (),
                         }
                     }
                     _ => (),
                 }
             }
         });
-    } 
+
+        if !running {
+            std::process::exit(0);
+        }
+    }
 }

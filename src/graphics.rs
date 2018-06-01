@@ -5,27 +5,27 @@ pub mod render_manager {
     use vulkano_win::VkSurfaceBuild;
     use vulkano_win::Window;
 
-    use vulkano::instance::Instance;
+    use std::sync::Arc;
     use vulkano::buffer::BufferUsage;
     use vulkano::buffer::CpuAccessibleBuffer;
-    use vulkano::device::Device;
     use vulkano::command_buffer::AutoCommandBufferBuilder;
     use vulkano::command_buffer::DynamicState;
+    use vulkano::device::Device;
+    use vulkano::device::Queue;
     use vulkano::framebuffer::Framebuffer;
     use vulkano::framebuffer::Subpass;
-    use vulkano::pipeline::GraphicsPipeline;
+    use vulkano::image::SwapchainImage;
+    use vulkano::instance::Instance;
     use vulkano::pipeline::viewport::Viewport;
+    use vulkano::pipeline::GraphicsPipeline;
     use vulkano::swapchain;
+    use vulkano::swapchain::AcquireError;
     use vulkano::swapchain::PresentMode;
     use vulkano::swapchain::SurfaceTransform;
     use vulkano::swapchain::Swapchain;
-    use vulkano::swapchain::AcquireError;
     use vulkano::swapchain::SwapchainCreationError;
-    use vulkano::image::SwapchainImage;
     use vulkano::sync::now;
     use vulkano::sync::GpuFuture;
-    use std::sync::Arc;
-    use vulkano::device::Queue;
 
     use vulkano::framebuffer::RenderPassAbstract;
 
@@ -34,12 +34,12 @@ pub mod render_manager {
 
     use winit::{EventsLoop, WindowBuilder};
 
-    use std::mem;
+    use std::boxed::Box;
     use std::marker::Send;
     use std::marker::Sync;
-    use std::boxed::Box;
-    use std::vec::Vec;
+    use std::mem;
     use std::option::Option;
+    use std::vec::Vec;
 
     #[derive(Debug, Clone)]
     struct Vertex {
@@ -279,7 +279,8 @@ pub mod render_manager {
 
                     let mut recreate_swapchain = false;
 
-                    let mut previous_frame_end = Box::new(now(components.device.clone())) as Box<GpuFuture>;
+                    let mut previous_frame_end =
+                        Box::new(now(components.device.clone())) as Box<GpuFuture>;
 
                     previous_frame_end.cleanup_finished();
 
@@ -291,7 +292,8 @@ pub mod render_manager {
                             [new_width, new_height]
                         };
 
-                        let (new_swapchain, new_images) = match components.swapchain
+                        let (new_swapchain, new_images) = match components
+                            .swapchain
                             .recreate_with_dimension(dimensions)
                         {
                             Ok(r) => r,
@@ -311,7 +313,8 @@ pub mod render_manager {
 
                     if components.framebuffers.is_none() {
                         let new_framebuffers = Some(
-                            components.images
+                            components
+                                .images
                                 .iter()
                                 .map(|image| {
                                     Arc::new(
@@ -352,13 +355,11 @@ pub mod render_manager {
                             DynamicState {
                                 line_width: None,
                                 // TODO: Find a way to do this without having to dynamically allocate a Vec every frame.
-                                viewports: Some(vec![
-                                    Viewport {
-                                        origin: [0.0, 0.0],
-                                        dimensions: [dimensions[0] as f32, dimensions[1] as f32],
-                                        depth_range: 0.0..1.0,
-                                    },
-                                ]),
+                                viewports: Some(vec![Viewport {
+                                    origin: [0.0, 0.0],
+                                    dimensions: [dimensions[0] as f32, dimensions[1] as f32],
+                                    depth_range: 0.0..1.0,
+                                }]),
                                 scissors: None,
                             },
                             components.vertex_buffer.clone(),
@@ -375,10 +376,30 @@ pub mod render_manager {
                         .join(acquire_future)
                         .then_execute(components.queue.clone(), command_buffer)
                         .unwrap()
-                        .then_swapchain_present(components.queue.clone(), components.swapchain.clone(), image_num)
-                        .then_signal_fence_and_flush()
-                        .unwrap();
-                    previous_frame_end = Box::new(future) as Box<_>;
+                        .then_swapchain_present(
+                            components.queue.clone(),
+                            components.swapchain.clone(),
+                            image_num,
+                        )
+                        .then_signal_fence_and_flush();
+
+                    // previous_frame_end = Box::new(future) as Box<_>;
+
+                    match future {
+                        Ok(future) => {
+                            previous_frame_end = Box::new(future) as Box<_>;
+                        }
+                        Err(vulkano::sync::FlushError::OutOfDate) => {
+                            recreate_swapchain = true;
+                            previous_frame_end =
+                                Box::new(vulkano::sync::now(components.device.clone())) as Box<_>;
+                        }
+                        Err(e) => {
+                            println!("{:?}", e);
+                            previous_frame_end =
+                                Box::new(vulkano::sync::now(components.device.clone())) as Box<_>;
+                        }
+                    }
                 }
                 None => {
                     // TODO(Z): Fix this to stop program
