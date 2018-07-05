@@ -62,15 +62,19 @@ pub mod render_manager {
         dimensions: [u32; 2],
     }
 
-    #[derive(Clone)]
+    
     pub struct RenderManager {
         render_components: Option<VulkanRenderComponents>,
+        recreate_swapchain: bool,
+        previous_frame_end: Option<Box<GpuFuture>>,
     }
 
     impl RenderManager {
         pub fn new() -> RenderManager {
             RenderManager {
                 render_components: None,
+                recreate_swapchain: false,
+                previous_frame_end: None,
             }
         }
 
@@ -257,6 +261,8 @@ pub mod render_manager {
                 >,
             > = None;
 
+            self.previous_frame_end = Some(Box::new(now(device.clone())) as Box<GpuFuture>);
+
             self.render_components = Some(VulkanRenderComponents {
                 device: device,
                 swapchain: swapchain,
@@ -276,15 +282,10 @@ pub mod render_manager {
             match self.render_components {
                 Some(ref mut components) => {
                     let dimensions = components.dimensions;
+                    
+                    self.previous_frame_end.expect("Previous frame not set!").cleanup_finished();
 
-                    let mut recreate_swapchain = false;
-
-                    let mut previous_frame_end =
-                        Box::new(now(components.device.clone())) as Box<GpuFuture>;
-
-                    previous_frame_end.cleanup_finished();
-
-                    if recreate_swapchain {
+                    if self.recreate_swapchain {
                         // Get the new dimensions for the viewport/framebuffers.
                         let dimensions = {
                             let (new_width, new_height) =
@@ -308,7 +309,7 @@ pub mod render_manager {
 
                         components.framebuffers = None;
 
-                        recreate_swapchain = false;
+                        self.recreate_swapchain = false;
                     }
 
                     if components.framebuffers.is_none() {
@@ -334,7 +335,7 @@ pub mod render_manager {
                         match swapchain::acquire_next_image(components.swapchain.clone(), None) {
                             Ok(r) => r,
                             Err(AcquireError::OutOfDate) => {
-                                recreate_swapchain = true;
+                                self.recreate_swapchain = true;
                                 return;
                             }
                             Err(err) => panic!("{:?}", err),
@@ -371,8 +372,9 @@ pub mod render_manager {
                         .unwrap()
                         .build()
                         .unwrap();
-
-                    let future = previous_frame_end
+                    
+                    
+                    let future = self.previous_frame_end.expect("Previous frame not set!")
                         .join(acquire_future)
                         .then_execute(components.queue.clone(), command_buffer)
                         .unwrap()
@@ -381,16 +383,17 @@ pub mod render_manager {
                             components.swapchain.clone(),
                             image_num,
                         )
-                        .then_signal_fence_and_flush();
+                        .then_signal_fence_and_flush().unwrap();
 
                     // previous_frame_end = Box::new(future) as Box<_>;
 
+                    /*
                     match future {
                         Ok(future) => {
                             previous_frame_end = Box::new(future) as Box<_>;
                         }
                         Err(vulkano::sync::FlushError::OutOfDate) => {
-                            recreate_swapchain = true;
+                            self.recreate_swapchain = true;
                             previous_frame_end =
                                 Box::new(vulkano::sync::now(components.device.clone())) as Box<_>;
                         }
@@ -400,10 +403,14 @@ pub mod render_manager {
                                 Box::new(vulkano::sync::now(components.device.clone())) as Box<_>;
                         }
                     }
+                    */
+                    // 
+                    
                 }
                 None => {
                     // TODO(Z): Fix this to stop program
-                    panic!("Someone didn't start the renderer...")
+                    panic!("Someone didn't start the renderer...");
+                    
                 }
             }
         }

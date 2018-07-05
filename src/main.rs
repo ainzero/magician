@@ -13,7 +13,6 @@ use winit::EventsLoop;
 
 use std::fs::File;
 use std::io::{BufReader, Read, Result};
-use std::process;
 
 fn read_file(file_name: &str) -> Result<String> {
     let file = File::open(file_name)?;
